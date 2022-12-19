@@ -4,7 +4,7 @@ from torch.utils.data import DataLoader, Dataset
 import numpy as np
 import os
 
-from data_utils import CasiaCPCPretrain, casia_collate_fn
+from data_util import Unlabeled, unlabeled_collate_fn
 from cpc import CPC
 from config import Config
 
@@ -17,10 +17,10 @@ def cpc_pretrain(model:CPC,
                  device='cpu'):
 
 	model.to(device)
-	training_loader = DataLoader(training_set, batch_size, shuffle=True, collate_fn=casia_collate_fn)
-	val_loader = DataLoader(val_set, batch_size, shuffle=True, collate_fn=casia_collate_fn)
+	training_loader = DataLoader(training_set, batch_size, shuffle=True, collate_fn=unlabeled_collate_fn)
+	val_loader = DataLoader(val_set, batch_size, shuffle=True, collate_fn=unlabeled_collate_fn)
 
-	optimizer = torch.optim.Adam(params=model.parameters(), lr=learning_rate)
+	optimizer = torch.optim.Adam(params=model.parameters(), lr=learning_rate, weight_decay=Config.CPC_WEIGHT_DECAY)
 
 	for e in range(epoches):
 		for i, x in enumerate(training_loader):
@@ -33,11 +33,12 @@ def cpc_pretrain(model:CPC,
 			training_nce.backward()
 			optimizer.step()
 
-			if i % 1 == 0:
+			if i % 5 == 0:
 				model.eval()
-				x_val = next(iter(val_loader))
-				x_val = x_val.to(device)
-				val_nce, val_acc = model(x_val)
+				with torch.no_grad():
+					x_val = next(iter(val_loader))
+					x_val = x_val.to(device)
+					val_nce, val_acc = model(x_val)
 
 				print()
 				print('%d epochs, %d/%d' % (e, i, len(training_loader)))
@@ -45,24 +46,22 @@ def cpc_pretrain(model:CPC,
 				print('val      InfoNCE: %.5f, val      acc: %.5f' % (val_nce, val_acc))
 				print()
 
-		if (e-10) % 10 == 0:
+		if e % 10 == 0:
 			torch.save(
 				{ 'model_state_dict' : model.state_dict() },
 				'cpc_%d.pth' % (e)
 			)
 
 if __name__ == '__main__':
-	training_set = CasiaCPCPretrain(train=True)
-	model = CPC(
-		Config.CPC_TIMESTEP,
-		cnn_dim=Config.CPC_CNN_DIM,
-		rnn_dim=Config.CPC_RNN_DIM,
-		device=Config.DEVICE
-	)
+	training_set = Unlabeled(train=True)
+	val_set = Unlabeled(train=False)
+	model = CPC()
+	ckpt = torch.load('./cpc_90.pth', map_location=torch.device(Config.DEVICE))
+	model.load_state_dict(ckpt['model_state_dict'])
 	cpc_pretrain(model,
 	             training_set,
-	             training_set,
+	             val_set,
 	             batch_size=Config.CPC_NUM_SAMPLE,
 	             learning_rate=Config.CPC_LEARNING_RATE,
-	             epoches=50,
+	             epoches=100,
 	             device=Config.DEVICE)
